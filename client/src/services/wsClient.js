@@ -74,6 +74,24 @@ class WSClient {
     this._ws.send(JSON.stringify({ type, seq: ++this._seq, ...payload }))
   }
 
+  /**
+   * Backpressure helper for large file transfers.
+   * Waits (non-blocking) until the browser's WebSocket send buffer drains
+   * below `maxBuffered` bytes before resolving.
+   *
+   * Without this, sending 3GB+ of chunks fills the browser's internal WS
+   * buffer (limited to ~64-128MB), causing silent chunk drops while
+   * FILE_COMPLETE sneaks through, leaving the receiver with a partial file.
+   *
+   * @param {number} maxBuffered - Max allowed bytes in the send buffer (default 1MB)
+   */
+  async waitDrained(maxBuffered = 1 * 1024 * 1024) {
+    if (!this._ws) return
+    while (this._ws.readyState === WebSocket.OPEN && this._ws.bufferedAmount > maxBuffered) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+  }
+
   /** Open the connection. Safe to call multiple times. */
   connect() {
     if (this._state === WS_STATE.OPEN || this._state === WS_STATE.CONNECTING) return
