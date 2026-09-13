@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ChatWindow.jsx
  * Main chat area. Displays messages for the active peer conversation,
  * auto-scrolls to latest, and provides a message input bar.
@@ -62,6 +62,25 @@ function MessageBubble({ msg, isMine }) {
   )
 }
 
+function TypingBubble() {
+  return (
+    <div className="animate-slide-in-left" style={{ display: 'flex', padding: '2px 0', alignItems: 'flex-start', gap: 8 }}>
+      <div style={{
+        padding: '10px 14px',
+        borderRadius: 'var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-sm)',
+        background: 'var(--color-bg-elevated)',
+        border: '1px solid var(--color-border)',
+        display: 'flex', gap: 4, alignItems: 'center'
+      }}>
+        <span className="typing-dot animate-bounce-soft" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-text-muted)', animationDelay: '0ms' }} />
+        <span className="typing-dot animate-bounce-soft" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-text-muted)', animationDelay: '150ms' }} />
+        <span className="typing-dot animate-bounce-soft" style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--color-text-muted)', animationDelay: '300ms' }} />
+      </div>
+      <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', alignSelf: 'center' }}>is typing...</span>
+    </div>
+  )
+}
+
 function EmptyChat({ peerName }) {
   return (
     <div
@@ -106,31 +125,94 @@ function EmptyChat({ peerName }) {
 export default function ChatWindow({ activePeer }) {
   const [messages, setMessages] = useState({}) // { [peerId]: Message[] }
   const [inputValue, setInputValue] = useState('')
+  const [typingPeers, setTypingPeers] = useState(new Set())
+  
   const bottomRef = useRef(null)
+  const fileInputRef = useRef(null)
+  const typingTimeoutRef = useRef(null)
 
   const peerId = activePeer?.id
   const peerMessages = (peerId && messages[peerId]) || []
+  const isPeerTyping = peerId && typingPeers.has(peerId)
 
-  // Scroll to bottom whenever messages change
+  // 1. Load chats from local storage
+  useEffect(() => {
+    const saved = localStorage.getItem('locallink_chats')
+    if (saved) {
+      try {
+        setMessages(JSON.parse(saved))
+      } catch (err) {
+        console.error('Failed to parse chats from local storage', err)
+      }
+    }
+  }, [])
+
+  // 2. Save chats to local storage
+  useEffect(() => {
+    if (Object.keys(messages).length > 0) {
+      localStorage.setItem('locallink_chats', JSON.stringify(messages))
+    }
+  }, [messages])
+
+  // Scroll to bottom whenever messages or typing state changes
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [peerMessages])
+  }, [peerMessages, isPeerTyping])
 
-  // Listen for incoming chat messages
+  // Listen for incoming chat messages and typing events
   useEffect(() => {
-    const unsub = wsClient.on(WS_EVENT.CHAT_MESSAGE, (payload) => {
+    const unsubChat = wsClient.on(WS_EVENT.CHAT_MESSAGE, (payload) => {
       const { from, text, ts } = payload
       setMessages((prev) => ({
         ...prev,
         [from]: [...(prev[from] || []), { from, text, ts: ts ?? Date.now(), id: `${from}-${ts}` }],
       }))
     })
-    return unsub
+
+    const unsubTypingStart = wsClient.on(WS_EVENT.TYPING_START, ({ from }) => {
+      setTypingPeers((prev) => {
+        const next = new Set(prev)
+        next.add(from)
+        return next
+      })
+    })
+
+    const unsubTypingStop = wsClient.on(WS_EVENT.TYPING_STOP, ({ from }) => {
+      setTypingPeers((prev) => {
+        const next = new Set(prev)
+        next.delete(from)
+        return next
+      })
+    })
+
+    return () => {
+      unsubChat()
+      unsubTypingStart()
+      unsubTypingStop()
+    }
   }, [])
+
+  const handleInputChange = (e) => {
+    setInputValue(e.target.value)
+    if (!peerId) return
+
+    wsClient.send('TYPING_START', { to: peerId })
+    
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
+    
+    typingTimeoutRef.current = setTimeout(() => {
+      wsClient.send('TYPING_STOP', { to: peerId })
+    }, 2000)
+  }
 
   function handleSend() {
     const text = inputValue.trim()
     if (!text || !peerId) return
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current)
+      wsClient.send('TYPING_STOP', { to: peerId })
+    }
 
     const msg = { from: 'me', to: peerId, text, ts: Date.now(), id: `me-${Date.now()}` }
 
@@ -150,6 +232,117 @@ export default function ChatWindow({ activePeer }) {
       e.preventDefault()
       handleSend()
     }
+  }
+
+  // --- FILE TRANSFER LOGIC ---
+  function triggerFileSelect() {
+    fileInputRef.current?.click()
+  }
+
+  async function handleFileSelect(e) {
+    const file = e.target.files?.[0]
+    if (!file || !peerId) return
+    e.target.value = '' // reset input
+
+    const transferId = `tx-${Date.now()}`
+    
+    // 1. Send Offer
+    wsClient.send('FILE_OFFER', {
+      to: peerId,
+      transferId,
+      name: file.name,
+      size: file.size,
+      type: file.type
+    })
+
+    // Add a local message indicating we are waiting
+    const msgId = `me-${Date.now()}`
+    setMessages((prev) => ({
+      ...prev,
+      [peerId]: [...(prev[peerId] || []), { from: 'me', to: peerId, text: `📎 Offering file: ${file.name} (Waiting for accept...)`, ts: Date.now(), id: msgId }],
+    }))
+
+    // Helper to update the message text
+    const updateProgressMsg = (text) => {
+      setMessages((prev) => {
+        const peerMsgs = prev[peerId] || []
+        return {
+          ...prev,
+          [peerId]: peerMsgs.map(m => m.id === msgId ? { ...m, text } : m)
+        }
+      })
+    }
+
+    // 2. Await Acceptance
+    const isAccepted = await new Promise((resolve) => {
+      const handleAccept = (payload) => {
+        if (payload.transferId === transferId) {
+          cleanup()
+          resolve(true)
+        }
+      }
+      const handleReject = (payload) => {
+        if (payload.transferId === transferId) {
+          cleanup()
+          resolve(false)
+        }
+      }
+      
+      const unsubAccept = wsClient.on(WS_EVENT.FILE_ACCEPT, handleAccept)
+      const unsubReject = wsClient.on(WS_EVENT.FILE_REJECT, handleReject)
+
+      function cleanup() {
+        unsubAccept()
+        unsubReject()
+      }
+    })
+
+    if (!isAccepted) {
+      updateProgressMsg(`❌ Transfer rejected: ${file.name}`)
+      return
+    }
+
+    updateProgressMsg(`📎 Sending file: ${file.name} (0%)`)
+
+    // 3. Stream Chunks securely using File.slice
+    const CHUNK_SIZE = 256 * 1024 // 256KB
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
+
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE
+      const end = Math.min(start + CHUNK_SIZE, file.size)
+      const blob = file.slice(start, end)
+      
+      const arrayBuffer = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = reject
+        reader.readAsArrayBuffer(blob)
+      })
+      
+      let binary = ''
+      const bytes = new Uint8Array(arrayBuffer)
+      const len = bytes.byteLength
+      for (let j = 0; j < len; j++) {
+        binary += String.fromCharCode(bytes[j])
+      }
+      const base64Chunk = btoa(binary)
+
+      wsClient.send('FILE_CHUNK', {
+        to: peerId,
+        transferId,
+        chunkIndex: i,
+        totalChunks,
+        data: base64Chunk
+      })
+
+      const percent = Math.round(((i + 1) / totalChunks) * 100)
+      updateProgressMsg(`📎 Sending file: ${file.name} (${percent}%)`)
+    }
+    
+    // 4. Complete
+    wsClient.send('FILE_COMPLETE', { to: peerId, transferId })
+    updateProgressMsg(`✅ Sent file: ${file.name}`)
   }
 
   return (
@@ -213,6 +406,7 @@ export default function ChatWindow({ activePeer }) {
             <MessageBubble key={msg.id} msg={msg} isMine={msg.from === 'me'} />
           ))
         )}
+        {isPeerTyping && <TypingBubble />}
         <div ref={bottomRef} />
       </div>
 
@@ -230,12 +424,27 @@ export default function ChatWindow({ activePeer }) {
             flexShrink: 0,
           }}
         >
+          {/* Hidden File Input */}
+          <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display: 'none' }} />
+          
+          {/* Attachment Button */}
+          <button
+            className="btn btn-ghost btn-icon"
+            onClick={triggerFileSelect}
+            title="Attach file"
+            style={{ flexShrink: 0, width: 42, height: 42, color: 'var(--color-text-muted)' }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+
           <textarea
             id="message-input"
             className="input"
             placeholder={`Message ${activePeer.name}…`}
             value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
+            onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             rows={1}
             style={{
