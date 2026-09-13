@@ -354,6 +354,12 @@ export default function ChatWindow({ activePeer }) {
       }
       const base64Chunk = btoa(binary)
 
+      // Backpressure: wait until the browser's WS send buffer has room
+      // before queuing the next chunk. Without this, 3GB+ of chunks flood
+      // the buffer (max ~64MB), causing silent drops. The receiver then
+      // gets a partial file even though the sender shows "100% sent".
+      await wsClient.waitDrained(1 * 1024 * 1024) // Max 1MB queued at a time
+
       wsClient.send('FILE_CHUNK', {
         to: peerId,
         transferId,
@@ -365,8 +371,12 @@ export default function ChatWindow({ activePeer }) {
       const percent = Math.round(((i + 1) / totalChunks) * 100)
       updateProgressMsg(`📎 Sending file: ${file.name} (${percent}%)`)
     }
-    
-    // 4. Complete
+
+    // 4. Complete — wait for buffer to hit zero before signalling done.
+    // This guarantees the proxy has received every single chunk before
+    // it forwards FILE_COMPLETE to the receiver. Without this wait, the
+    // completion signal can arrive at the receiver before the last chunks.
+    await wsClient.waitDrained(0)
     wsClient.send('FILE_COMPLETE', { to: peerId, transferId })
     updateProgressMsg(`✅ Sent file: ${file.name}`)
   }
