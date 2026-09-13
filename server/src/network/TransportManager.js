@@ -73,7 +73,7 @@ class TransportManager extends EventEmitter {
       this._cleanupSocket(ip, socket);
     });
 
-    this.emit('connection', { ip, socket });
+    this.emit('connection', { ip, socket, isOutbound: knownIp !== null });
   }
 
   _cleanupSocket(ip, closingSocket) {

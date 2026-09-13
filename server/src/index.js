@@ -55,7 +55,7 @@ discovery.on('peerOffline', (ip) => {
 });
 
 // Connect Aritra's TCP to Arnav's Protocol and Shobit's Crypto
-transport.on('connection', ({ ip, socket }) => {
+transport.on('connection', ({ ip, socket, isOutbound }) => {
   console.log(`[Proxy] TCP Connected to ${ip}`);
   
   const localKeyPair = generateKeyPair();
@@ -148,14 +148,16 @@ transport.on('connection', ({ ip, socket }) => {
     }
   });
 
-  // Initiate Handshake if we connected out
-  const initMsg = MessageBuilder.build(
-    OPCODES.HANDSHAKE_INIT,
-    0,
-    Buffer.alloc(32, 0), // Dummy session ID until ACK provides the real one
-    localKeyPair.publicKey
-  );
-  socket.write(initMsg);
+  if (isOutbound) {
+    // Initiate Handshake if we connected out
+    const initMsg = MessageBuilder.build(
+      OPCODES.HANDSHAKE_INIT,
+      0,
+      Buffer.alloc(32, 0), // Dummy session ID until ACK provides the real one
+      localKeyPair.publicKey
+    );
+    socket.write(initMsg);
+  }
 });
 
 transport.on('disconnected', (ip) => {
