@@ -100,8 +100,9 @@ transport.on('connection', ({ ip, socket }) => {
       if (msg.opcode === OPCODES.CHAT_MESSAGE) {
         broadcastWS({
           type: 'CHAT_MESSAGE',
-          sender: ip, // Usually we'd map this to a username
-          text: plaintext.toString()
+          from: ip, // The frontend expects 'from', not 'sender'
+          text: plaintext.toString(),
+          ts: Date.now() // Frontend uses this for message timestamps
         });
       }
       // Add other opcodes (FILE_CHUNK, etc.) here as needed
@@ -123,7 +124,7 @@ transport.on('connection', ({ ip, socket }) => {
 transport.on('disconnected', (ip) => {
   console.log(`[Proxy] TCP Disconnected from ${ip}`);
   activePeers.delete(ip);
-  broadcastWS({ type: 'PEER_OFFLINE', ip });
+  broadcastWS({ type: 'PEER_OFFLINE', peerId: ip }); // Frontend expects peerId
 });
 
 // Connect Abhinav's Frontend to Arnav's Protocol and Aritra's TCP
@@ -147,14 +148,14 @@ wss.on('connection', (ws) => {
       const msg = JSON.parse(data);
       
       if (msg.type === 'CHAT_MESSAGE') {
-        const { targetIp, text } = msg;
-        const peerState = activePeers.get(targetIp);
+        const { to, text } = msg; // Frontend sends 'to', not 'targetIp'
+        const peerState = activePeers.get(to);
         
         if (peerState && peerState.sessionKey) {
           const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(text));
           const packet = MessageBuilder.build(
             OPCODES.CHAT_MESSAGE,
-            Date.now(), // simple sequence
+            Math.floor(Date.now() / 1000) % 4294967295, // fit into 32-bit unsigned int
             Buffer.alloc(32, 1), // dummy session ID for now
             encryptedPayload
           );

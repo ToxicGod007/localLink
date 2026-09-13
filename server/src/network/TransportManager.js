@@ -37,7 +37,7 @@ class TransportManager extends EventEmitter {
 
     socket.on('error', (err) => {
       console.error(`TCP connection error to ${ip}:`, err.message);
-      this._cleanupSocket(ip);
+      this._cleanupSocket(ip, socket);
     });
 
     return socket;
@@ -57,21 +57,26 @@ class TransportManager extends EventEmitter {
 
     socket.on('error', (err) => {
       console.error(`Socket error from ${ip}:`, err.message);
-      this._cleanupSocket(ip);
+      this._cleanupSocket(ip, socket);
     });
 
     socket.on('close', () => {
-      this._cleanupSocket(ip);
+      this._cleanupSocket(ip, socket);
     });
 
     this.emit('connection', { ip, socket });
   }
 
-  _cleanupSocket(ip) {
+  _cleanupSocket(ip, closingSocket) {
     if (this.activeSockets.has(ip)) {
-      const socket = this.activeSockets.get(ip);
-      if (!socket.destroyed) {
-        socket.destroy();
+      const currentSocket = this.activeSockets.get(ip);
+      // Only clean up if the socket closing is actually the active one
+      if (closingSocket && currentSocket !== closingSocket) {
+        return; // It's an old/duplicate socket closing, ignore
+      }
+      
+      if (!currentSocket.destroyed) {
+        currentSocket.destroy();
       }
       this.activeSockets.delete(ip);
       this.emit('disconnected', ip);
