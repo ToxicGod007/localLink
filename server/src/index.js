@@ -28,7 +28,6 @@ const wss = new WebSocket.Server({ port: WS_PORT }, () => {
 // State Management
 const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer }
 const activeTransfers = new Map(); // transferId -> ip
-const localKeyPair = generateKeyPair();
 
 // Connect Aritra's UDP to Abhinav's Frontend
 discovery.on('peerFound', (peerInfo) => {
@@ -53,6 +52,9 @@ discovery.on('peerFound', (peerInfo) => {
 // Connect Aritra's TCP to Arnav's Protocol and Shobit's Crypto
 transport.on('connection', ({ ip, socket }) => {
   console.log(`[Proxy] TCP Connected to ${ip}`);
+  
+  // Perfect Forward Secrecy: Generate a fresh key pair for EVERY new connection
+  const localKeyPair = generateKeyPair();
   
   const msgBuffer = new MessageBuffer();
   activePeers.set(ip, { socket, sessionKey: null, msgBuffer });
