@@ -1,0 +1,14 @@
+{
+  "name": "locallink",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspaces",
+    "build": "npm run build --workspaces",
+    "install:all": "npm install"
+  }
+}
