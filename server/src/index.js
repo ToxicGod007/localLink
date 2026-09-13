@@ -58,6 +58,9 @@ discovery.on('peerOffline', (ip) => {
 transport.on('connection', ({ ip, socket }) => {
   console.log(`[Proxy] TCP Connected to ${ip}`);
   
+  // Perfect Forward Secrecy: Generate a fresh key pair for EVERY new connection
+  const localKeyPair = generateKeyPair();
+  
   const msgBuffer = new MessageBuffer();
   // Perfect Forward Secrecy: Generate a fresh keypair for this specific connection
   const localKeyPair = generateKeyPair();

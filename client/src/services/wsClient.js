@@ -1,4 +1,4 @@
-﻿/**
+/**
  * wsClient.js — LocalLink WebSocket Service
  *
  * Singleton client that bridges the React UI to the local backend proxy.
@@ -26,7 +26,11 @@ export const WS_EVENT = Object.freeze({
   PEER_ANNOUNCE: 'PEER_ANNOUNCE',
   PEER_OFFLINE:  'PEER_OFFLINE',
   CHAT_MESSAGE:  'CHAT_MESSAGE',
+  TYPING_START:  'TYPING_START',
+  TYPING_STOP:   'TYPING_STOP',
   FILE_OFFER:    'FILE_OFFER',
+  FILE_ACCEPT:   'FILE_ACCEPT',
+  FILE_REJECT:   'FILE_REJECT',
   FILE_CHUNK:    'FILE_CHUNK',
   FILE_COMPLETE: 'FILE_COMPLETE',
 })
