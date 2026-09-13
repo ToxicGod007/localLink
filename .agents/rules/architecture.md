@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Network Protocol & Cryptography Rules
 
 ## Protocol Engineering
