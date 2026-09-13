@@ -144,7 +144,7 @@ transport.on('connection', ({ ip, socket, isOutbound }) => {
         else if (msg.opcode === OPCODES.FILE_CHUNK) type = 'FILE_CHUNK';
         else if (msg.opcode === OPCODES.FILE_COMPLETE) type = 'FILE_COMPLETE';
 
-        broadcastWS({ type, from: ip, ...payloadObj });
+        broadcastWS({ ...payloadObj, type, from: ip });
       }
     } catch (err) {
       console.error(`[Proxy] Failed to decrypt message from ${ip}:`, err.message);

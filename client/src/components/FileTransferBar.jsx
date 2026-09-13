@@ -34,11 +34,11 @@ export default function FileTransferBar() {
 
   useEffect(() => {
     // New file offer from a peer
-    const unsubOffer = wsClient.on(WS_EVENT.FILE_OFFER, ({ from, name, size, type: fileType, transferId }) => {
+    const unsubOffer = wsClient.on(WS_EVENT.FILE_OFFER, ({ from, name, size, mimeType, transferId }) => {
       chunkDataRef.current[transferId] = {}
       setTransfers((prev) => [
         ...prev,
-        { transferId, from, name, size, fileType: fileType || 'application/octet-stream', status: STATUS.PENDING, progress: 0, totalChunks: 0 },
+        { transferId, from, name, size, fileType: mimeType || 'application/octet-stream', status: STATUS.PENDING, progress: 0, totalChunks: 0 },
       ])
     })
 

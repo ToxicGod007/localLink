@@ -252,7 +252,7 @@ export default function ChatWindow({ activePeer }) {
       transferId,
       name: file.name,
       size: file.size,
-      type: file.type
+      mimeType: file.type  // Note: named 'mimeType' to avoid colliding with wsClient's own 'type' field
     })
 
     // Add a local message indicating we are waiting
