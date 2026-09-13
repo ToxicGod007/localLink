@@ -36,8 +36,11 @@ discovery.on('peerFound', (peerInfo) => {
   // Notify frontend
   broadcastWS({
     type: 'PEER_ANNOUNCE',
-    ip: peerInfo.ip,
-    username: peerInfo.username
+    peer: {
+      id: peerInfo.ip,
+      ip: peerInfo.ip,
+      name: peerInfo.username
+    }
   });
 
   // Automatically attempt TCP connection
@@ -127,6 +130,18 @@ transport.on('disconnected', (ip) => {
 wss.on('connection', (ws) => {
   console.log('[Proxy] Frontend React UI connected via WebSocket.');
   
+  // Immediately send all currently known peers to this new frontend connection
+  for (const [ip, peerInfo] of discovery.peers.entries()) {
+    ws.send(JSON.stringify({
+      type: 'PEER_ANNOUNCE',
+      peer: {
+        id: peerInfo.ip || ip,
+        ip: peerInfo.ip || ip,
+        name: peerInfo.username
+      }
+    }));
+  }
+
   ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data);
