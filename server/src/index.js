@@ -27,6 +27,7 @@ const wss = new WebSocket.Server({ port: WS_PORT }, () => {
 
 // State Management
 const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer }
+const activeTransfers = new Map(); // transferId -> ip
 const localKeyPair = generateKeyPair();
 
 // Connect Aritra's UDP to Abhinav's Frontend
@@ -104,8 +105,26 @@ transport.on('connection', ({ ip, socket }) => {
           text: plaintext.toString(),
           ts: Date.now() // Frontend uses this for message timestamps
         });
+      } else if (msg.opcode === OPCODES.TYPING_START) {
+        broadcastWS({ type: 'TYPING_START', from: ip });
+      } else if (msg.opcode === OPCODES.TYPING_STOP) {
+        broadcastWS({ type: 'TYPING_STOP', from: ip });
+      } else if ([OPCODES.FILE_OFFER, OPCODES.FILE_ACCEPT, OPCODES.FILE_REJECT, OPCODES.FILE_CHUNK, OPCODES.FILE_COMPLETE].includes(msg.opcode)) {
+        const payloadObj = JSON.parse(plaintext.toString());
+        
+        if (msg.opcode === OPCODES.FILE_OFFER && payloadObj.transferId) {
+          activeTransfers.set(payloadObj.transferId, ip);
+        }
+        
+        let type = '';
+        if (msg.opcode === OPCODES.FILE_OFFER) type = 'FILE_OFFER';
+        else if (msg.opcode === OPCODES.FILE_ACCEPT) type = 'FILE_ACCEPT';
+        else if (msg.opcode === OPCODES.FILE_REJECT) type = 'FILE_REJECT';
+        else if (msg.opcode === OPCODES.FILE_CHUNK) type = 'FILE_CHUNK';
+        else if (msg.opcode === OPCODES.FILE_COMPLETE) type = 'FILE_COMPLETE';
+
+        broadcastWS({ type, from: ip, ...payloadObj });
       }
-      // Add other opcodes (FILE_CHUNK, etc.) here as needed
     } catch (err) {
       console.error(`[Proxy] Failed to decrypt message from ${ip}:`, err.message);
     }
@@ -159,6 +178,34 @@ wss.on('connection', (ws) => {
             Buffer.alloc(32, 1), // dummy session ID for now
             encryptedPayload
           );
+          peerState.socket.write(packet);
+        }
+      } else if (['TYPING_START', 'TYPING_STOP'].includes(msg.type)) {
+        const { to } = msg;
+        const peerState = activePeers.get(to);
+        if (peerState && peerState.sessionKey) {
+          const opcode = msg.type === 'TYPING_START' ? OPCODES.TYPING_START : OPCODES.TYPING_STOP;
+          const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(''));
+          const packet = MessageBuilder.build(opcode, Math.floor(Date.now() / 1000) % 4294967295, Buffer.alloc(32, 1), encryptedPayload);
+          peerState.socket.write(packet);
+        }
+      } else if (['FILE_OFFER', 'FILE_ACCEPT', 'FILE_REJECT', 'FILE_CHUNK', 'FILE_COMPLETE'].includes(msg.type)) {
+        const { type, to, ...rest } = msg;
+        
+        // Find the target IP. Abhinav's frontend doesn't send 'to' for ACCEPT/REJECT, so we look it up!
+        const targetIp = to || activeTransfers.get(rest.transferId);
+        const peerState = activePeers.get(targetIp);
+
+        if (peerState && peerState.sessionKey) {
+          let opcode;
+          if (type === 'FILE_OFFER') opcode = OPCODES.FILE_OFFER;
+          else if (type === 'FILE_ACCEPT') opcode = OPCODES.FILE_ACCEPT;
+          else if (type === 'FILE_REJECT') opcode = OPCODES.FILE_REJECT;
+          else if (type === 'FILE_CHUNK') opcode = OPCODES.FILE_CHUNK;
+          else if (type === 'FILE_COMPLETE') opcode = OPCODES.FILE_COMPLETE;
+
+          const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(JSON.stringify(rest)));
+          const packet = MessageBuilder.build(opcode, Math.floor(Date.now() / 1000) % 4294967295, Buffer.alloc(32, 1), encryptedPayload);
           peerState.socket.write(packet);
         }
       }
