@@ -6,6 +6,14 @@
 import { useEffect, useRef, useState } from 'react'
 import wsClient, { WS_EVENT } from '../services/wsClient'
 
+function formatBytes(bytes) {
+  if (!bytes) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
 function formatTime(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
@@ -185,10 +193,28 @@ export default function ChatWindow({ activePeer }) {
       })
     })
 
+    // Listen for incoming FILE_OFFER — add a message bubble in chat so the
+    // receiver can see the file name and size in their chat history.
+    const unsubFileOffer = wsClient.on(WS_EVENT.FILE_OFFER, ({ from, name, size, transferId }) => {
+      setMessages((prev) => ({
+        ...prev,
+        [from]: [
+          ...(prev[from] || []),
+          {
+            from,
+            text: `📎 ${name}  ·  ${formatBytes(size)}`,
+            ts: Date.now(),
+            id: `file-offer-${transferId}`,
+          },
+        ],
+      }))
+    })
+
     return () => {
       unsubChat()
       unsubTypingStart()
       unsubTypingStop()
+      unsubFileOffer()
     }
   }, [])
 

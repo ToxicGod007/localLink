@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PeerList.jsx
  * Left sidebar listing discovered LAN peers.
  * Peers arrive via PEER_ANNOUNCE / PEER_OFFLINE WebSocket events.
@@ -41,7 +41,7 @@ function PeerAvatar({ name }) {
   )
 }
 
-function PeerRow({ peer, isActive, onClick }) {
+function PeerRow({ peer, isActive, onClick, unread }) {
   return (
     <button
       id={`peer-${peer.id}`}
@@ -67,44 +67,44 @@ function PeerRow({ peer, isActive, onClick }) {
         <PeerAvatar name={peer.name} />
         <span
           className="status-dot online animate-pulse-ring"
-          style={{
-            position: 'absolute',
-            bottom: 0,
-            right: 0,
-            width: 8,
-            height: 8,
-            border: '2px solid var(--color-bg-surface)',
-          }}
+          style={{ position: 'absolute', bottom: 0, right: 0, width: 8, height: 8, border: '2px solid var(--color-bg-surface)' }}
         />
       </div>
       <div style={{ overflow: 'hidden', flex: 1 }}>
-        <div
-          style={{
-            fontSize: '0.875rem',
-            fontWeight: 500,
-            color: 'var(--color-text-primary)',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
+        <div style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--color-text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {peer.name}
         </div>
-        <div
-          style={{
-            fontSize: '0.75rem',
-            color: 'var(--color-text-muted)',
-            fontFamily: 'var(--font-mono)',
-          }}
-        >
+        <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', fontFamily: 'var(--font-mono)' }}>
           {peer.ip}
         </div>
       </div>
+      {/* Unread badge — shown when there are unseen messages from this peer */}
+      {unread > 0 && (
+        <span
+          style={{
+            minWidth: 20,
+            height: 20,
+            borderRadius: 10,
+            background: 'var(--color-accent)',
+            color: '#fff',
+            fontSize: '0.7rem',
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '0 5px',
+            flexShrink: 0,
+            boxShadow: 'var(--shadow-glow-sm)',
+          }}
+        >
+          {unread > 99 ? '99+' : unread}
+        </span>
+      )}
     </button>
   )
 }
 
-export default function PeerList({ activeChat, onSelectPeer }) {
+export default function PeerList({ activeChat, onSelectPeer, unreadCounts = {} }) {
   const [peers, setPeers] = useState([])
 
   useEffect(() => {
@@ -167,6 +167,7 @@ export default function PeerList({ activeChat, onSelectPeer }) {
             peer={peer}
             isActive={activeChat === peer.id}
             onClick={onSelectPeer}
+            unread={unreadCounts[peer.id] || 0}
           />
         ))
       ) : (
