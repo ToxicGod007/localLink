@@ -12,7 +12,9 @@ const OPCODES = {
   FILE_ACCEPT: 0x31,
   FILE_REJECT: 0x32,
   FILE_CHUNK: 0x33,
-  FILE_COMPLETE: 0x34
+  FILE_COMPLETE: 0x34,
+  TYPING_START: 0x40,
+  TYPING_STOP: 0x41
 };
 
 module.exports = {
