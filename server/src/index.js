@@ -28,6 +28,7 @@ const wss = new WebSocket.Server({ port: WS_PORT }, () => {
 // State Management
 const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer, sessionId, localKeyPair }
 const activeTransfers = new Map(); // transferId -> ip
+let activeWsClient = null; // Single active frontend WebSocket connection
 
 // Connect Aritra's UDP to Abhinav's Frontend
 discovery.on('peerFound', (peerInfo) => {
@@ -172,16 +173,14 @@ transport.on('disconnected', (ip) => {
 wss.on('connection', (ws) => {
   console.log('[Proxy] Frontend React UI connected via WebSocket.');
 
-  // Bug Fix: Close any pre-existing stale WS connections.
-  // This prevents broadcastWS from sending to ghost/zombie connections
-  // which caused duplicate messages when the frontend hot-reloaded.
-  wss.clients.forEach((client) => {
-    if (client !== ws && client.readyState === WebSocket.OPEN) {
-      console.log('[Proxy] Closing stale WebSocket connection.');
-      client.terminate();
-    }
-  });
+  // Track the most recently connected client as the only active one.
+  // This naturally handles hot-reloads and reconnects without terminating
+  // old connections (which would trigger an infinite reconnect storm).
+  activeWsClient = ws;
 
+  ws.on('close', () => {
+    if (activeWsClient === ws) activeWsClient = null;
+  });
   // Immediately send all currently known peers to this new frontend connection
   for (const [ip, peerInfo] of discovery.peers.entries()) {
     ws.send(JSON.stringify({
@@ -248,11 +247,11 @@ wss.on('connection', (ws) => {
 });
 
 function broadcastWS(data) {
-  wss.clients.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data));
-    }
-  });
+  // Only send to the single active frontend client.
+  // Using wss.clients would hit zombie connections and cause duplicate messages.
+  if (activeWsClient && activeWsClient.readyState === WebSocket.OPEN) {
+    activeWsClient.send(JSON.stringify(data));
+  }
 }
 
 // Start everything
