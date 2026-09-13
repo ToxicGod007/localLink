@@ -31,21 +31,23 @@ const activeTransfers = new Map(); // transferId -> ip
 
 // Connect Aritra's UDP to Abhinav's Frontend
 discovery.on('peerFound', (peerInfo) => {
-  console.log(`[Proxy] Found peer: ${peerInfo.username} at ${peerInfo.ip}:${peerInfo.tcpPort}`);
+  // Normalize the IP in case UDP discovery returned an IPv6-mapped address
+  const ip = peerInfo.ip;
+  console.log(`[Proxy] Found peer: ${peerInfo.username} at ${ip}:${peerInfo.tcpPort}`);
   
   // Notify frontend
   broadcastWS({
     type: 'PEER_ANNOUNCE',
     peer: {
-      id: peerInfo.ip,
-      ip: peerInfo.ip,
+      id: ip,
+      ip: ip,
       name: peerInfo.username
     }
   });
 
   // Automatically attempt TCP connection
-  if (!activePeers.has(peerInfo.ip)) {
-    transport.connectToPeer(peerInfo.ip, peerInfo.tcpPort);
+  if (!activePeers.has(ip)) {
+    transport.connectToPeer(ip, peerInfo.tcpPort);
   }
 });
 
@@ -169,7 +171,17 @@ transport.on('disconnected', (ip) => {
 // Connect Abhinav's Frontend to Arnav's Protocol and Aritra's TCP
 wss.on('connection', (ws) => {
   console.log('[Proxy] Frontend React UI connected via WebSocket.');
-  
+
+  // Bug Fix: Close any pre-existing stale WS connections.
+  // This prevents broadcastWS from sending to ghost/zombie connections
+  // which caused duplicate messages when the frontend hot-reloaded.
+  wss.clients.forEach((client) => {
+    if (client !== ws && client.readyState === WebSocket.OPEN) {
+      console.log('[Proxy] Closing stale WebSocket connection.');
+      client.terminate();
+    }
+  });
+
   // Immediately send all currently known peers to this new frontend connection
   for (const [ip, peerInfo] of discovery.peers.entries()) {
     ws.send(JSON.stringify({

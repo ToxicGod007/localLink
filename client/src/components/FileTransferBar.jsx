@@ -1,9 +1,14 @@
-﻿/**
+/**
  * FileTransferBar.jsx
  * Slide-up notification bar for incoming file offers and active transfers.
  * Listens for FILE_OFFER, FILE_CHUNK, FILE_COMPLETE events from wsClient.
+ *
+ * Fixes applied:
+ *  - handleAccept/handleReject now send `to: transfer.from` so the proxy can route correctly.
+ *  - Chunk binary data is stored in a ref (not React state) to avoid giant re-renders.
+ *  - FILE_COMPLETE assembles all chunks into a Blob and triggers a real browser download.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import wsClient, { WS_EVENT } from '../services/wsClient'
 
 function formatBytes(bytes) {
@@ -14,51 +19,105 @@ function formatBytes(bytes) {
 }
 
 const STATUS = Object.freeze({
-  PENDING:    'PENDING',    // Offer received, awaiting response
-  ACTIVE:     'ACTIVE',     // Accepted, chunks arriving
-  COMPLETE:   'COMPLETE',   // Done
-  REJECTED:   'REJECTED',   // User rejected
+  PENDING:  'PENDING',  // Offer received, awaiting response
+  ACTIVE:   'ACTIVE',   // Accepted, chunks arriving
+  COMPLETE: 'COMPLETE', // Done
+  REJECTED: 'REJECTED', // User rejected
 })
 
 export default function FileTransferBar() {
   const [transfers, setTransfers] = useState([])
 
+  // Store raw chunk data outside of React state to avoid massive re-renders.
+  // Structure: { [transferId]: { [chunkIndex]: Uint8Array } }
+  const chunkDataRef = useRef({})
+
   useEffect(() => {
     // New file offer from a peer
-    const unsubOffer = wsClient.on(WS_EVENT.FILE_OFFER, ({ from, name, size, transferId }) => {
+    const unsubOffer = wsClient.on(WS_EVENT.FILE_OFFER, ({ from, name, size, type: fileType, transferId }) => {
+      chunkDataRef.current[transferId] = {}
       setTransfers((prev) => [
         ...prev,
-        { transferId, from, name, size, status: STATUS.PENDING, progress: 0, chunkIndex: 0, totalChunks: 0 },
+        { transferId, from, name, size, fileType: fileType || 'application/octet-stream', status: STATUS.PENDING, progress: 0, totalChunks: 0 },
       ])
     })
 
-    // Chunk progress update
-    const unsubChunk = wsClient.on(WS_EVENT.FILE_CHUNK, ({ transferId, chunkIndex, totalChunks }) => {
+    // Chunk arriving — store binary data in ref, update progress in state
+    const unsubChunk = wsClient.on(WS_EVENT.FILE_CHUNK, ({ transferId, chunkIndex, totalChunks, data }) => {
+      // Decode base64 -> Uint8Array and store in the ref (no re-render cost)
+      if (chunkDataRef.current[transferId] !== undefined) {
+        try {
+          const binary = atob(data)
+          const bytes = new Uint8Array(binary.length)
+          for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j)
+          chunkDataRef.current[transferId][chunkIndex] = bytes
+        } catch (err) {
+          console.error(`[FileTransferBar] Failed to decode chunk ${chunkIndex}:`, err)
+        }
+      }
+
       setTransfers((prev) =>
         prev.map((t) =>
           t.transferId === transferId
             ? {
                 ...t,
                 status: STATUS.ACTIVE,
-                chunkIndex,
                 totalChunks,
-                progress: totalChunks > 0 ? Math.round((chunkIndex / totalChunks) * 100) : 0,
+                // +1 so the final chunk shows 100%
+                progress: totalChunks > 0 ? Math.round(((chunkIndex + 1) / totalChunks) * 100) : 0,
               }
             : t
         )
       )
     })
 
-    // Transfer complete
+    // Transfer complete — assemble Blob and trigger download
     const unsubComplete = wsClient.on(WS_EVENT.FILE_COMPLETE, ({ transferId }) => {
-      setTransfers((prev) =>
-        prev.map((t) =>
-          t.transferId === transferId
-            ? { ...t, status: STATUS.COMPLETE, progress: 100 }
-            : t
+      setTransfers((prev) => {
+        const transfer = prev.find((t) => t.transferId === transferId)
+
+        if (transfer) {
+          const chunks = chunkDataRef.current[transferId] || {}
+          const total = transfer.totalChunks
+
+          try {
+            // Assemble in order
+            const orderedChunks = []
+            for (let i = 0; i < total; i++) {
+              if (chunks[i]) {
+                orderedChunks.push(chunks[i])
+              } else {
+                console.error(`[FileTransferBar] Missing chunk ${i} for transfer ${transferId}`)
+              }
+            }
+
+            const blob = new Blob(orderedChunks, { type: transfer.fileType })
+            const url = URL.createObjectURL(blob)
+
+            // Programmatic download
+            const a = document.createElement('a')
+            a.href = url
+            a.download = transfer.name
+            document.body.appendChild(a)
+            a.click()
+            document.body.removeChild(a)
+
+            // Free memory
+            setTimeout(() => URL.revokeObjectURL(url), 1000)
+          } catch (err) {
+            console.error('[FileTransferBar] Failed to assemble file for download:', err)
+          }
+
+          // Clean up chunk data from memory
+          delete chunkDataRef.current[transferId]
+        }
+
+        return prev.map((t) =>
+          t.transferId === transferId ? { ...t, status: STATUS.COMPLETE, progress: 100 } : t
         )
-      )
-      // Auto-dismiss completed transfers after 4 s
+      })
+
+      // Auto-dismiss completed transfers after 4s
       setTimeout(() => {
         setTransfers((prev) => prev.filter((t) => t.transferId !== transferId))
       }, 4000)
@@ -71,16 +130,18 @@ export default function FileTransferBar() {
     }
   }, [])
 
-  function handleAccept(transferId) {
-    wsClient.send('FILE_ACCEPT', { transferId })
+  // Bug fix: Pass `to: transfer.from` so the backend proxy knows where to route this.
+  function handleAccept(transfer) {
+    wsClient.send('FILE_ACCEPT', { transferId: transfer.transferId, to: transfer.from })
     setTransfers((prev) =>
-      prev.map((t) => (t.transferId === transferId ? { ...t, status: STATUS.ACTIVE } : t))
+      prev.map((t) => (t.transferId === transfer.transferId ? { ...t, status: STATUS.ACTIVE } : t))
     )
   }
 
-  function handleReject(transferId) {
-    wsClient.send('FILE_REJECT', { transferId })
-    setTransfers((prev) => prev.filter((t) => t.transferId !== transferId))
+  function handleReject(transfer) {
+    wsClient.send('FILE_REJECT', { transferId: transfer.transferId, to: transfer.from })
+    setTransfers((prev) => prev.filter((t) => t.transferId !== transfer.transferId))
+    delete chunkDataRef.current[transfer.transferId]
   }
 
   if (transfers.length === 0) return null
@@ -161,7 +222,7 @@ export default function FileTransferBar() {
 
             {/* Status badge */}
             {t.status === STATUS.COMPLETE && (
-              <span className="badge badge-online" style={{ flexShrink: 0 }}>Done</span>
+              <span className="badge badge-online" style={{ flexShrink: 0 }}>Done ✓</span>
             )}
             {t.status === STATUS.ACTIVE && (
               <span className="badge badge-accent" style={{ flexShrink: 0 }}>{t.progress}%</span>
@@ -182,7 +243,7 @@ export default function FileTransferBar() {
                 id={`accept-${t.transferId}`}
                 className="btn btn-success btn-sm"
                 style={{ flex: 1 }}
-                onClick={() => handleAccept(t.transferId)}
+                onClick={() => handleAccept(t)}
               >
                 Accept
               </button>
@@ -190,7 +251,7 @@ export default function FileTransferBar() {
                 id={`reject-${t.transferId}`}
                 className="btn btn-danger btn-sm"
                 style={{ flex: 1 }}
-                onClick={() => handleReject(t.transferId)}
+                onClick={() => handleReject(t)}
               >
                 Reject
               </button>

@@ -1,6 +1,17 @@
 const net = require('net');
 const { EventEmitter } = require('events');
 
+/**
+ * Strips IPv6-mapped IPv4 prefix (::ffff:x.x.x.x -> x.x.x.x)
+ * This prevents keys in activePeers from mismatching between
+ * outbound (pure IPv4) and inbound (IPv6-mapped) connections.
+ */
+function normalizeIp(ip) {
+  if (!ip) return ip;
+  if (ip.startsWith('::ffff:')) return ip.slice(7);
+  return ip;
+}
+
 class TransportManager extends EventEmitter {
   constructor(port = 9000) {
     super();
@@ -46,12 +57,13 @@ class TransportManager extends EventEmitter {
   _handleNewSocket(socket, knownIp = null) {
     // Disable Nagle's algorithm for real-time responsiveness
     socket.setNoDelay(true);
-    
-    // Aritra's Fix: TCP Keep-Alives and Timeout
-    socket.setKeepAlive(true, 5000);
-    socket.setTimeout(15000); // 15 seconds of silence kills the socket
 
-    const ip = knownIp || socket.remoteAddress;
+    // Keep-alives detect silently dead connections without a hard timeout.
+    // A hard setTimeout(15000) was removed because it killed sockets during
+    // large file transfers where chunks arrive every few seconds.
+    socket.setKeepAlive(true, 5000);
+
+    const ip = normalizeIp(knownIp || socket.remoteAddress);
     this.activeSockets.set(ip, socket);
 
     socket.on('data', (data) => {
@@ -62,11 +74,6 @@ class TransportManager extends EventEmitter {
     socket.on('error', (err) => {
       console.error(`Socket error from ${ip}:`, err.message);
       this._cleanupSocket(ip, socket);
-    });
-    
-    socket.on('timeout', () => {
-      console.error(`Socket timeout from ${ip}`);
-      socket.destroy();
     });
 
     socket.on('close', () => {
