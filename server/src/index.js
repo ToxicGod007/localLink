@@ -26,7 +26,7 @@ const wss = new WebSocket.Server({ port: WS_PORT }, () => {
 });
 
 // State Management
-const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer }
+const activePeers = new Map(); // ip -> { socket, sessionKey, msgBuffer, sessionId, localKeyPair }
 const activeTransfers = new Map(); // transferId -> ip
 
 // Connect Aritra's UDP to Abhinav's Frontend
@@ -49,6 +49,11 @@ discovery.on('peerFound', (peerInfo) => {
   }
 });
 
+discovery.on('peerOffline', (ip) => {
+  console.log(`[Proxy] Peer ${ip} offline (TTL expired)`);
+  broadcastWS({ type: 'PEER_OFFLINE', peerId: ip });
+});
+
 // Connect Aritra's TCP to Arnav's Protocol and Shobit's Crypto
 transport.on('connection', ({ ip, socket }) => {
   console.log(`[Proxy] TCP Connected to ${ip}`);
@@ -57,7 +62,9 @@ transport.on('connection', ({ ip, socket }) => {
   const localKeyPair = generateKeyPair();
   
   const msgBuffer = new MessageBuffer();
-  activePeers.set(ip, { socket, sessionKey: null, msgBuffer });
+  // Perfect Forward Secrecy: Generate a fresh keypair for this specific connection
+  const localKeyPair = generateKeyPair();
+  activePeers.set(ip, { socket, sessionKey: null, msgBuffer, sessionId: null, localKeyPair });
 
   // Pipe Aritra's raw data into Arnav's buffer
   socket.on('data', (data) => {
@@ -70,14 +77,17 @@ transport.on('connection', ({ ip, socket }) => {
     
     // ECDH Handshake Logic (Shobit's crypto)
     if (msg.opcode === OPCODES.HANDSHAKE_INIT) {
-      peerState.sessionKey = deriveSharedSecret(localKeyPair.privateKey, msg.payload);
+      peerState.sessionKey = deriveSharedSecret(peerState.localKeyPair.privateKey, msg.payload);
+      
+      // Arnav's Fix: Generate a secure 32-byte Session ID for this connection
+      peerState.sessionId = crypto.randomBytes(32);
       
       // Send ACK back
       const ackMsg = MessageBuilder.build(
         OPCODES.HANDSHAKE_ACK,
         0,
-        Buffer.alloc(32, 0), // Dummy session ID for handshake
-        localKeyPair.publicKey
+        peerState.sessionId, // Send the newly generated session ID
+        peerState.localKeyPair.publicKey
       );
       socket.write(ackMsg);
       console.log(`[Proxy] Handshake completed with ${ip}`);
@@ -85,14 +95,23 @@ transport.on('connection', ({ ip, socket }) => {
     }
 
     if (msg.opcode === OPCODES.HANDSHAKE_ACK) {
-      peerState.sessionKey = deriveSharedSecret(localKeyPair.privateKey, msg.payload);
+      peerState.sessionKey = deriveSharedSecret(peerState.localKeyPair.privateKey, msg.payload);
+      
+      // Arnav's Fix: Store the Session ID provided by the peer
+      peerState.sessionId = msg.sessionId;
       console.log(`[Proxy] Handshake ACK received from ${ip}`);
       return;
     }
 
     // Decrypt standard messages
-    if (!peerState.sessionKey) {
-      console.warn(`[Proxy] Received encrypted message from ${ip} but no session key established.`);
+    if (!peerState.sessionKey || !peerState.sessionId) {
+      console.warn(`[Proxy] Received encrypted message from ${ip} but handshake is not complete.`);
+      return;
+    }
+    
+    // Arnav's Fix: Enforce Session ID matches!
+    if (!msg.sessionId.equals(peerState.sessionId)) {
+      console.warn(`[Proxy] Dropped message from ${ip}: Invalid Session ID! Possible hijack attempt.`);
       return;
     }
 
@@ -136,7 +155,7 @@ transport.on('connection', ({ ip, socket }) => {
   const initMsg = MessageBuilder.build(
     OPCODES.HANDSHAKE_INIT,
     0,
-    Buffer.alloc(32, 0),
+    Buffer.alloc(32, 0), // Dummy session ID until ACK provides the real one
     localKeyPair.publicKey
   );
   socket.write(initMsg);
@@ -177,7 +196,7 @@ wss.on('connection', (ws) => {
           const packet = MessageBuilder.build(
             OPCODES.CHAT_MESSAGE,
             Math.floor(Date.now() / 1000) % 4294967295, // fit into 32-bit unsigned int
-            Buffer.alloc(32, 1), // dummy session ID for now
+            peerState.sessionId, // Arnav's Fix: Use actual session ID!
             encryptedPayload
           );
           peerState.socket.write(packet);
@@ -188,7 +207,7 @@ wss.on('connection', (ws) => {
         if (peerState && peerState.sessionKey) {
           const opcode = msg.type === 'TYPING_START' ? OPCODES.TYPING_START : OPCODES.TYPING_STOP;
           const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(''));
-          const packet = MessageBuilder.build(opcode, Math.floor(Date.now() / 1000) % 4294967295, Buffer.alloc(32, 1), encryptedPayload);
+          const packet = MessageBuilder.build(opcode, Math.floor(Date.now() / 1000) % 4294967295, peerState.sessionId, encryptedPayload);
           peerState.socket.write(packet);
         }
       } else if (['FILE_OFFER', 'FILE_ACCEPT', 'FILE_REJECT', 'FILE_CHUNK', 'FILE_COMPLETE'].includes(msg.type)) {
@@ -207,7 +226,7 @@ wss.on('connection', (ws) => {
           else if (type === 'FILE_COMPLETE') opcode = OPCODES.FILE_COMPLETE;
 
           const encryptedPayload = encryptMessage(peerState.sessionKey, Buffer.from(JSON.stringify(rest)));
-          const packet = MessageBuilder.build(opcode, Math.floor(Date.now() / 1000) % 4294967295, Buffer.alloc(32, 1), encryptedPayload);
+          const packet = MessageBuilder.build(opcode, Math.floor(Date.now() / 1000) % 4294967295, peerState.sessionId, encryptedPayload);
           peerState.socket.write(packet);
         }
       }

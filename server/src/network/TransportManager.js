@@ -46,6 +46,10 @@ class TransportManager extends EventEmitter {
   _handleNewSocket(socket, knownIp = null) {
     // Disable Nagle's algorithm for real-time responsiveness
     socket.setNoDelay(true);
+    
+    // Aritra's Fix: TCP Keep-Alives and Timeout
+    socket.setKeepAlive(true, 5000);
+    socket.setTimeout(15000); // 15 seconds of silence kills the socket
 
     const ip = knownIp || socket.remoteAddress;
     this.activeSockets.set(ip, socket);
@@ -58,6 +62,11 @@ class TransportManager extends EventEmitter {
     socket.on('error', (err) => {
       console.error(`Socket error from ${ip}:`, err.message);
       this._cleanupSocket(ip, socket);
+    });
+    
+    socket.on('timeout', () => {
+      console.error(`Socket timeout from ${ip}`);
+      socket.destroy();
     });
 
     socket.on('close', () => {

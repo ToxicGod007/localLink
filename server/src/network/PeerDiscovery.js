@@ -50,6 +50,18 @@ class PeerDiscovery extends EventEmitter {
         // Broadcast to local subnet
         this.socket.send(payload, 0, payload.length, this.udpPort, '255.255.255.255');
       }, 3000);
+      
+      // Aritra's Fix: Sweep for offline peers every 5 seconds
+      this.ttlInterval = setInterval(() => {
+        const now = Date.now();
+        for (const [ip, peer] of this.peers.entries()) {
+          // If haven't seen for 15 seconds, assume they went offline
+          if (now - peer.lastSeen > 15000) {
+            this.peers.delete(ip);
+            this.emit('peerOffline', ip);
+          }
+        }
+      }, 5000);
     });
 
     this.socket.bind(this.udpPort);
@@ -57,6 +69,7 @@ class PeerDiscovery extends EventEmitter {
 
   stop() {
     if (this.broadcastInterval) clearInterval(this.broadcastInterval);
+    if (this.ttlInterval) clearInterval(this.ttlInterval);
     try {
       this.socket.close();
     } catch(e) {}
