@@ -1,4 +1,4 @@
-﻿/**
+/**
  * App.jsx — LocalLink Main Application
  *
  * Three-panel layout:
@@ -31,8 +31,7 @@ export default function App() {
       id="app-root"
       className="dot-grid"
       style={{
-        width: '100vw',
-        height: '100dvh',
+        flex: 1,                   /* fills #root which is already 100% height */
         backgroundColor: 'var(--color-bg-base)',
         position: 'relative',
         overflow: 'hidden',
@@ -40,14 +39,14 @@ export default function App() {
         flexDirection: 'column',
       }}
     >
-      {/* Decorative ambient glow blobs */}
+      {/* Decorative ambient glow blobs — position:fixed keeps them out of the flex layout */}
       <div
         className="glow-blob glow-blob-accent"
-        style={{ width: 500, height: 500, top: -150, left: -150 }}
+        style={{ position: 'fixed', width: 500, height: 500, top: -150, left: -150, zIndex: 0 }}
       />
       <div
         className="glow-blob glow-blob-cyan"
-        style={{ width: 350, height: 350, bottom: -80, right: -80 }}
+        style={{ position: 'fixed', width: 350, height: 350, bottom: -80, right: -80, zIndex: 0 }}
       />
 
       {/* ── Top bar ────────────────────────────────────────────── */}
