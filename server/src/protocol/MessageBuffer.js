@@ -21,6 +21,13 @@ class MessageBuffer extends EventEmitter {
     while (this.buffer.length >= HEADER_SIZE) {
       // 4-byte big-endian starting at index 2
       const payloadLength = this.buffer.readUInt32BE(2);
+      
+      // Arnav's OOM DoS Fix: Max payload length 100MB
+      if (payloadLength > 100 * 1024 * 1024) {
+        this.emit('error', new Error(`Payload too large: ${payloadLength} bytes. Max allowed is 100MB.`));
+        return;
+      }
+      
       const totalMessageSize = HEADER_SIZE + payloadLength;
 
       if (this.buffer.length >= totalMessageSize) {
