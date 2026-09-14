@@ -10,7 +10,7 @@ const { generateKeyPair, deriveSharedSecret, encryptMessage, decryptMessage } = 
 // Configuration
 const TCP_PORT = 9000;
 const UDP_PORT = 9001;
-const WS_PORT = 5173; // Hardcoded in Abhinav's frontend
+const WS_PORT = 9002; // Distinct from Vite dev port (3000) and TCP/UDP ports (9000/9001)
 
 // Ask for custom username
 const username = process.argv[2] || `User_${Math.floor(Math.random() * 1000)}`;
@@ -181,14 +181,18 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     if (activeWsClient === ws) activeWsClient = null;
   });
-  // Immediately send all currently known peers to this new frontend connection
-  for (const [ip, peerInfo] of discovery.peers.entries()) {
+  // Immediately re-announce all peers that have COMPLETED the ECDH handshake (sessionKey set).
+  // Using activePeers (not discovery.peers) as the source of truth so we never expose a peer
+  // that is still mid-handshake and can't receive messages yet.
+  for (const [ip, peerState] of activePeers.entries()) {
+    if (!peerState.sessionKey) continue; // skip peers still mid-handshake
+    const discoveredInfo = discovery.peers.get(ip);
     ws.send(JSON.stringify({
       type: 'PEER_ANNOUNCE',
       peer: {
-        id: peerInfo.ip || ip,
-        ip: peerInfo.ip || ip,
-        name: peerInfo.username
+        id: ip,
+        ip: ip,
+        name: discoveredInfo?.username || ip
       }
     }));
   }

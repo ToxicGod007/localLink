@@ -41,14 +41,20 @@ class TransportManager extends EventEmitter {
     if (this.activeSockets.has(ip)) return this.activeSockets.get(ip);
 
     const socket = new net.Socket();
-    
-    socket.connect(port, ip, () => {
-      this._handleNewSocket(socket, ip);
-    });
 
-    socket.on('error', (err) => {
+    // Pre-connection error handler: covers the window between socket creation and
+    // successful connect. Removed once connected so only _handleNewSocket's handler
+    // remains — avoiding a double-fire of _cleanupSocket on post-connection errors.
+    const preConnectError = (err) => {
       console.error(`TCP connection error to ${ip}:`, err.message);
-      this._cleanupSocket(ip, socket);
+      socket.destroy();
+    };
+    socket.once('error', preConnectError);
+
+    socket.connect(port, ip, () => {
+      // Hand off to _handleNewSocket which registers its own error/close listeners.
+      socket.removeListener('error', preConnectError);
+      this._handleNewSocket(socket, ip);
     });
 
     return socket;

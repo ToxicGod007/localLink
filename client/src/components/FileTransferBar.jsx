@@ -11,13 +11,8 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import wsClient, { WS_EVENT } from '../services/wsClient'
+import { formatBytes } from '../utils/formatBytes'
 
-function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
 
 const STATUS = Object.freeze({
   PENDING:  'PENDING',

@@ -1,4 +1,5 @@
 const dgram = require('dgram');
+const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
 class PeerDiscovery extends EventEmitter {
@@ -7,6 +8,9 @@ class PeerDiscovery extends EventEmitter {
     this.username = username;
     this.tcpPort = tcpPort;
     this.udpPort = udpPort;
+    // Unique identifier for this node — used to filter our own UDP broadcasts without
+    // relying on username (which can collide) or TCP port (which can differ across NICs).
+    this.nodeId = crypto.randomUUID();
     
     this.socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
     this.peers = new Map(); // ip -> peerData
@@ -23,8 +27,9 @@ class PeerDiscovery extends EventEmitter {
       try {
         const peerInfo = JSON.parse(msg.toString());
         
-        // Don't add ourselves
-        if (peerInfo.tcpPort === this.tcpPort && peerInfo.username === this.username) return;
+        // Ignore ourselves: compare by nodeId instead of username+port.
+        // Username-based filtering breaks when two peers share the same name (e.g. User_42).
+        if (peerInfo.nodeId === this.nodeId) return;
 
         if (!this.peers.has(rinfo.address)) {
           this.peers.set(rinfo.address, { ...peerInfo, lastSeen: Date.now() });
@@ -45,7 +50,8 @@ class PeerDiscovery extends EventEmitter {
       this.broadcastInterval = setInterval(() => {
         const payload = Buffer.from(JSON.stringify({
           username: this.username,
-          tcpPort: this.tcpPort
+          tcpPort: this.tcpPort,
+          nodeId: this.nodeId  // unique self-ID for loopback filtering
         }));
         // Broadcast to local subnet
         this.socket.send(payload, 0, payload.length, this.udpPort, '255.255.255.255');

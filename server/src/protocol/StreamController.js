@@ -1,3 +1,13 @@
+/**
+ * @deprecated StreamController is NOT used by the live proxy (server/src/index.js).
+ *
+ * The real file-transfer path works by receiving base64-encoded chunks from the browser
+ * over WebSocket JSON and forwarding them as encrypted TCP packets — no disk I/O needed.
+ *
+ * StreamController was originally designed to stream a file *from disk* on the server side.
+ * It remains here (with its test) for reference, but is dead code in the running application.
+ * If a disk-side file transfer mode is ever added, this can be integrated at that point.
+ */
 const fs = require('fs');
 const MessageBuilder = require('./MessageBuilder');
 const { OPCODES } = require('./constants');
