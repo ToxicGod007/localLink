@@ -5,14 +5,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import wsClient, { WS_EVENT } from '../services/wsClient'
-
-function formatBytes(bytes) {
-  if (!bytes) return ''
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
-}
+import { formatBytes } from '../utils/formatBytes'
 
 function formatTime(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
@@ -138,6 +131,9 @@ export default function ChatWindow({ activePeer }) {
   const bottomRef = useRef(null)
   const fileInputRef = useRef(null)
   const typingTimeoutRef = useRef(null)
+  // Tracks whether we are already in a "typing" state for the current peer session.
+  // Prevents TYPING_START from being sent on every single keystroke (network spam).
+  const isTypingRef = useRef(false)
 
   const peerId = activePeer?.id
   const peerMessages = (peerId && messages[peerId]) || []
@@ -156,6 +152,9 @@ export default function ChatWindow({ activePeer }) {
   }, [])
 
   // 2. Save chats to local storage
+  // NOTE: History is keyed by peer IP address. If a peer's IP changes (DHCP renewal),
+  // their history will appear under the old IP key and a new empty history starts.
+  // A proper fix would require a persistent peer identity (e.g., public key fingerprint).
   useEffect(() => {
     if (Object.keys(messages).length > 0) {
       localStorage.setItem('locallink_chats', JSON.stringify(messages))
@@ -222,11 +221,17 @@ export default function ChatWindow({ activePeer }) {
     setInputValue(e.target.value)
     if (!peerId) return
 
-    wsClient.send('TYPING_START', { to: peerId })
-    
+    // Only send TYPING_START on the first keystroke of a session (false → true transition).
+    // Without this flag, every character typed sends a packet.
+    if (!isTypingRef.current) {
+      isTypingRef.current = true
+      wsClient.send('TYPING_START', { to: peerId })
+    }
+
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current)
-    
+
     typingTimeoutRef.current = setTimeout(() => {
+      isTypingRef.current = false
       wsClient.send('TYPING_STOP', { to: peerId })
     }, 2000)
   }
@@ -237,6 +242,7 @@ export default function ChatWindow({ activePeer }) {
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current)
+      isTypingRef.current = false
       wsClient.send('TYPING_STOP', { to: peerId })
     }
 
@@ -299,32 +305,46 @@ export default function ChatWindow({ activePeer }) {
       })
     }
 
-    // 2. Await Acceptance
+    // 2. Await Acceptance — with a 60s timeout and PEER_OFFLINE cancellation.
+    // Previously this was a bare Promise with no escape hatch: if the receiver
+    // went offline after the offer was sent, the await would hang forever,
+    // freezing the file input and leaking the event listeners permanently.
     const isAccepted = await new Promise((resolve) => {
-      const handleAccept = (payload) => {
-        if (payload.transferId === transferId) {
-          cleanup()
-          resolve(true)
-        }
-      }
-      const handleReject = (payload) => {
-        if (payload.transferId === transferId) {
-          cleanup()
-          resolve(false)
-        }
-      }
-      
-      const unsubAccept = wsClient.on(WS_EVENT.FILE_ACCEPT, handleAccept)
-      const unsubReject = wsClient.on(WS_EVENT.FILE_REJECT, handleReject)
+      let settled = false
+      let timeoutHandle
+      let unsubAccept, unsubReject, unsubOffline
 
-      function cleanup() {
+      const settle = (result) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeoutHandle)
         unsubAccept()
         unsubReject()
+        unsubOffline()
+        resolve(result)
       }
+
+      const handleAccept = (payload) => {
+        if (payload.transferId === transferId) settle(true)
+      }
+      const handleReject = (payload) => {
+        if (payload.transferId === transferId) settle(false)
+      }
+      const handleOffline = ({ peerId: offlinePeer }) => {
+        // If the target peer goes offline, cancel the offer automatically
+        if (offlinePeer === peerId) settle(false)
+      }
+
+      unsubAccept  = wsClient.on(WS_EVENT.FILE_ACCEPT,  handleAccept)
+      unsubReject  = wsClient.on(WS_EVENT.FILE_REJECT,  handleReject)
+      unsubOffline = wsClient.on(WS_EVENT.PEER_OFFLINE, handleOffline)
+
+      // Timeout after 60 seconds so the sender isn't blocked indefinitely
+      timeoutHandle = setTimeout(() => settle(false), 60_000)
     })
 
     if (!isAccepted) {
-      updateProgressMsg(`❌ Transfer rejected: ${file.name}`)
+      updateProgressMsg(`❌ Transfer rejected or timed out: ${file.name}`)
       return
     }
 

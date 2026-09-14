@@ -2,7 +2,7 @@
  * wsClient.js — LocalLink WebSocket Service
  *
  * Singleton client that bridges the React UI to the local backend proxy.
- * Connects strictly to ws://localhost:5173 (the backend WS server).
+ * Connects strictly to ws://localhost:9002 (the backend WS server).
  *
  * Features:
  *  - Automatic reconnection with exponential backoff (1s -> 2s -> 4s ... cap 30s)
@@ -35,7 +35,7 @@ export const WS_EVENT = Object.freeze({
   FILE_COMPLETE: 'FILE_COMPLETE',
 })
 
-const WS_URL          = 'ws://localhost:5173'
+const WS_URL          = 'ws://localhost:9002'
 const BACKOFF_BASE_MS = 1_000   // 1 s initial delay
 const BACKOFF_MAX_MS  = 30_000  // 30 s maximum delay
 
@@ -136,7 +136,10 @@ class WSClient {
     this._ws.onclose = (event) => {
       console.warn(`[wsClient] Disconnected. Code=${event.code} Clean=${event.wasClean}`)
       this._ws = null
-      this._emit(WS_EVENT.CONNECTION, { state: WS_STATE.CLOSED, connected: false })
+      // Do NOT manually emit CONNECTION here — _scheduleReconnect calls _setState(RECONNECTING)
+      // and the intentional-close path calls _setState(CLOSED), both of which emit the event.
+      // Emitting manually first caused a double-fire: CLOSED → RECONNECTING in quick succession,
+      // making ConnectionStatus flicker and firing listeners twice.
       if (!this._intentionalClose) {
         this._scheduleReconnect()
       } else {
